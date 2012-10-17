@@ -67,6 +67,39 @@
         <script type="text/javascript" src="http://cdnjs.cloudflare.com/ajax/libs/stats.js/r11/Stats.js"></script>
 
         <script>
+
+// ----- POLY FILLS ---- //
+// -- requestAnimationFrame
+// http://paulirish.com/2011/requestanimationframe-for-smart-animating/
+// http://my.opera.com/emoller/blog/2011/12/20/requestanimationframe-for-smart-er-animating
+
+// requestAnimationFrame polyfill by Erik Möller
+// fixes from Paul Irish and Tino Zijdel
+(function() {
+    var lastTime = 0;
+    var vendors = ['ms', 'moz', 'webkit', 'o'];
+    for(var x = 0; x < vendors.length && !window.requestAnimationFrame; ++x) {
+        window.requestAnimationFrame = window[vendors[x]+'RequestAnimationFrame'];
+        window.cancelAnimationFrame = window[vendors[x]+'CancelAnimationFrame']
+                                   || window[vendors[x]+'CancelRequestAnimationFrame'];
+    }
+ 
+    if (!window.requestAnimationFrame)
+        window.requestAnimationFrame = function(callback, element) {
+            var currTime = new Date().getTime();
+            var timeToCall = Math.max(0, 16 - (currTime - lastTime));
+            var id = window.setTimeout(function() { callback(currTime + timeToCall); },
+              timeToCall);
+            lastTime = currTime + timeToCall;
+            return id;
+        };
+ 
+    if (!window.cancelAnimationFrame)
+        window.cancelAnimationFrame = function(id) {
+            clearTimeout(id);
+        };
+}());
+
 // ----- PERLIN ---- //
 // This is a port of Ken Perlin's Java code. The
 // original Java code is at http://cs.nyu.edu/%7Eperlin/noise/.
@@ -147,6 +180,52 @@ _.mixin({
         },
         randomBetween: function(min, max) {
             return Math.floor((Math.random() * ((max + 1) - min)) + min);
+        },
+        drawCircle: function (imageData, x0, y0, radius, color) {
+            var f = 1 - radius;
+            var ddF_x = 1;
+            var ddF_y = -2 * radius;
+            var x = 0;
+            var y = radius;
+            
+            _.setPixel(imageData, x0, y0 + radius, color.r, color.g, color.b, color.a);
+            _.setPixel(imageData, x0, y0 - radius, color.r, color.g, color.b, color.a);
+            _.setPixel(imageData, x0 + radius, y0, color.r, color.g, color.b, color.a);
+            _.setPixel(imageData, x0 - radius, y0, color.r, color.g, color.b, color.a);
+            
+            while (x < y)
+            {
+                if (f >= 0)
+                {
+                    y--;
+                    ddF_y += 2;
+                    f += ddF_y;
+                }
+                x++;
+                ddF_x += 2;
+                f += ddF_x;
+                _.setPixel(imageData, x0 + x, y0 + y, color.r, color.g, color.b, color.a);
+                _.setPixel(imageData, x0 - x, y0 + y, color.r, color.g, color.b, color.a);
+                _.setPixel(imageData, x0 + x, y0 - y, color.r, color.g, color.b, color.a);
+                _.setPixel(imageData, x0 - x, y0 - y, color.r, color.g, color.b, color.a);
+                _.setPixel(imageData, x0 + y, y0 + x, color.r, color.g, color.b, color.a);
+                _.setPixel(imageData, x0 - y, y0 + x, color.r, color.g, color.b, color.a);
+                _.setPixel(imageData, x0 + y, y0 - x, color.r, color.g, color.b, color.a);
+                _.setPixel(imageData, x0 - y, y0 - x, color.r, color.g, color.b, color.a);
+            }
+            
+        },
+        drawRect: function(imageData, x, y, width, height, color) {
+            var startX = x - Math.floor(width/2);
+            var startY = y - Math.floor(height/2);
+            
+            for(var i = 0; i < width; i++) {
+                for(var j = 0; j < height; j++) {
+                        var tx = startX + i;
+                        var ty = startY + j;
+                        _.setPixel(imageData, tx, ty, color.r, color.g, color.b, color.a);
+                }
+            }
         }
 });
 
@@ -155,13 +234,14 @@ _.mixin({
 // Application Constants //////////////////////////
 //////////////////////////////////////////////////
 
-const WORLD_WIDTH = 250;
-const WORLD_HEIGHT =250;
+const WORLD_WIDTH = 400;
+const WORLD_HEIGHT =400;
 const PERLIN_SCALE = 4;
 const PERLIN_SEED_R = 1;
 const PERLIN_SEED_G = 2;
 const PERLIN_SEED_B = 3;
-const TOTAL_CRITTERS = 700;
+const COLOR_EATERS = Math.floor((WORLD_WIDTH * WORLD_HEIGHT)/3200);
+const COLOR_TRAILERS = 200;
 
 ////////////////////////////////////////////////////
 // Base Entity ////////////////////////////////////
@@ -179,6 +259,9 @@ _.extend(Color.prototype, {
             && this.g === color.g
             && this.b === color.b
             && this.a === color.a;
+    },
+    clone:function() {
+        return new Color(this.r, this.g, this.b, this.a);
     }
 });
 
@@ -203,10 +286,21 @@ _.extend(Entity.prototype, {
     },
     
     setColor: function(c) {
-        this.r = (c>> 16) & 255;
-        this.g = (c>> 8) & 255;
-        this.b = c & 255;
-        this.a = 30;
+        //is it a color object?
+        if(c.a) {
+            this.r = c.r;
+            this.g = c.g;
+            this.b = c.b;
+            this.a = c.a;
+        }
+        //then it's probably hex bro
+        else
+        {
+            this.r = (c>> 16) & 255;
+            this.g = (c>> 8) & 255;
+            this.b = c & 255;
+            this.a = (c>>24) & 255;
+        }
     },
     
     update: function(critterLayer, worldLayer) {
@@ -222,8 +316,9 @@ _.extend(Entity.prototype, {
 // Locomotive Entity ////////////////////////////////////
 //////////////////////////////////////////////////
 var LocomotiveEntitiy = function() {
-    this.velocity = {x:0, y:0};
+    this.velocity = {x:0, y:1};
     this.directions = [-1,0,1];
+    this.timeSinceLastSwitch = 0;
 };
 
 _.extend(LocomotiveEntitiy.prototype, Entity.prototype, {
@@ -231,19 +326,33 @@ _.extend(LocomotiveEntitiy.prototype, Entity.prototype, {
     
     update: function(critterLayer, worldLayer) {
         this.setPosition(this.x + this.velocity.x, this.y + this.velocity.y);
-        var color = _.getPixel(critterLayer, this.x, this.y);
-        if(color.a > 80) {
+        var color = _.getPixel(worldLayer, this.x, this.y);
+        if(color.r > 40 && this.timeSinceLastSwitch > 10) {
             var rnd = Math.random() < .5;
             if(rnd) this.velocity.x = this.directions[Math.floor(Math.random() * this.directions.length)];
             else this.velocity.y = this.directions[Math.floor(Math.random() * this.directions.length)];
+            this.timeSinceLastSwitch = 0;
+        } else {
+            this.timeSinceLastSwitch++;
         }
     },
     
     draw: function(critterLayer, worldLayer) {
-        var color = _.getPixel(critterLayer, this.x, this.y);
-        var newA = (this.a + color.a) % 255;
-        _.setPixel(critterLayer, this.lastX, this.lastY, this.r, this.g, this.b, newA - 1);
-        _.setPixel(critterLayer, this.x, this.y, this.r, this.g, this.b, newA);
+        var color = _.getPixel(worldLayer, this.x, this.y);
+        var newA = Math.round(color.r / 10);
+        var r = 0.85;
+        var rinv = 1 - r;
+        color.r = color.r * r + this.r * rinv;
+        color.g = color.g * r + this.g * rinv;
+        color.b = color.b * r + this.b * rinv;
+        _.setPixel(worldLayer, this.x, this.y, color.r, color.g, color.b, 255);
+        /*
+        _.setPixel(worldLayer, this.x - 1, this.y, color.r, color.g, color.b, 255);
+        _.setPixel(worldLayer, this.x + 1, this.y, color.r, color.g, color.b, 255);
+        _.setPixel(worldLayer, this.x - 1, this.y - 1, color.r, color.g, color.b, 255);
+        _.setPixel(worldLayer, this.x + 1, this.y + 1, color.r, color.g, color.b, 255);
+        _.setPixel(worldLayer, this.x, this.y - 1, color.r, color.g, color.b, 255);
+        _.setPixel(worldLayer, this.x, this.y + 1, color.r, color.g, color.b, 255);*/
     }
 });
 
@@ -254,6 +363,7 @@ var ColorEater = function(targetColor) {
     this.targetColor = targetColor;
     this.nowColor;
     this.eatCurrentLocation = false;
+    this.dumpColorNow = false;
     this.velocity = {x:1, y:1};
 };
 
@@ -276,11 +386,35 @@ _.extend(ColorEater.prototype, Entity.prototype, {
         
         if(this.targetColor.r < this.nowColor.r) {
             this.eatCurrentLocation = true;
+            this.r += 5;
+            
+            if(this.r >= 255) {
+                this.dumpColorNow = true;
+            }
+            
             this.setRandomDirection();
         }
     },
-    
+        
     draw: function(critterLayer, worldLayer) {
+        if(this.dumpColorNow) {
+            //dump the current color into world
+            var c = this.nowColor.clone();
+            c.a = 255;
+            
+            var rand = Math.random();
+            if (rand > 0.5)
+            {
+                _.drawRect(worldLayer, this.x, this.y, 7, 7, c);
+            }
+            else 
+            {
+                _.drawCircle(worldLayer, this.x, this.y, 2, c);
+            }
+            
+            this.dumpColorNow = false;
+            this.r = 0;
+        }
         
         _.setPixel(critterLayer, this.lastX, this.lastY, this.r, this.g, this.b, 0);
         _.setPixel(critterLayer, this.x, this.y, this.r, this.g, this.b, this.a);
@@ -290,6 +424,7 @@ _.extend(ColorEater.prototype, Entity.prototype, {
             this.eatCurrentLocation = false;
         }
     }
+
 });
 
 // ----- Main.js ----- //
@@ -322,7 +457,7 @@ $(document).ready(function() {
         this.height = this.canvas.height;
         
         var colors = [0x381939,0xAD3269,0xF0BB77,0xE88D1A, 0x315E59]
-        for(var i = 0; i < TOTAL_CRITTERS; i++) {
+        for(var i = 0; i < COLOR_TRAILERS; i++) {
             var critter = new LocomotiveEntitiy();
             critter.setColor(colors[Math.floor(Math.random() * colors.length)]);
             critter.setPosition(Math.round(Math.random() * WORLD_WIDTH), Math.round(Math.random() * WORLD_HEIGHT));
@@ -330,9 +465,10 @@ $(document).ready(function() {
         }
         
         //Spawn Color Eaters
-        for(var i = 0; i < TOTAL_CRITTERS/2; i++) {
-            var critter = new ColorEater(new Color(150, 0, 0, 255));
-            critter.setColor(0x48FFFFFF);
+        for(var i = 0; i < COLOR_EATERS; i++) {
+            var c = new Color(150, 0, 0, 255);
+            var critter = new ColorEater(c);
+            critter.setColor(0xFF000000);
             critter.setPosition(Math.round(Math.random() * WORLD_WIDTH), Math.round(Math.random() * WORLD_HEIGHT));
             critters.push(critter);
         }
@@ -359,7 +495,7 @@ $(document).ready(function() {
             $cPanel.stop(true).show().fadeOut();
         });
 
-        drawWorld();
+        //drawWorld();
     };
     
     var drawWorld = function(seedShift) {
@@ -409,37 +545,6 @@ $(document).ready(function() {
 });
 
 
-// ----- POLY FILLS ---- //
-// -- requestAnimationFrame
-// http://paulirish.com/2011/requestanimationframe-for-smart-animating/
-// http://my.opera.com/emoller/blog/2011/12/20/requestanimationframe-for-smart-er-animating
-
-// requestAnimationFrame polyfill by Erik Möller
-// fixes from Paul Irish and Tino Zijdel
-(function() {
-    var lastTime = 0;
-    var vendors = ['ms', 'moz', 'webkit', 'o'];
-    for(var x = 0; x < vendors.length && !window.requestAnimationFrame; ++x) {
-        window.requestAnimationFrame = window[vendors[x]+'RequestAnimationFrame'];
-        window.cancelAnimationFrame = window[vendors[x]+'CancelAnimationFrame']
-                                   || window[vendors[x]+'CancelRequestAnimationFrame'];
-    }
- 
-    if (!window.requestAnimationFrame)
-        window.requestAnimationFrame = function(callback, element) {
-            var currTime = new Date().getTime();
-            var timeToCall = Math.max(0, 16 - (currTime - lastTime));
-            var id = window.setTimeout(function() { callback(currTime + timeToCall); },
-              timeToCall);
-            lastTime = currTime + timeToCall;
-            return id;
-        };
- 
-    if (!window.cancelAnimationFrame)
-        window.cancelAnimationFrame = function(id) {
-            clearTimeout(id);
-        };
-}());
         </script>
 
     </head>
